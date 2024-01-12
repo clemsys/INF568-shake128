@@ -1,0 +1,15 @@
+[package]
+name = "shake128"
+version = "0.1.0"
+edition = "2021"
+authors = ["Clément CHAPOT <clement.chapot@polytechnique.edu>"]
+description = "shake128 implementation following FIPS 202 for INF568 course at École polytechnique"
+readme = "README.md"
+repository = "https://github.com/clemsys/INF568-shake128"
+license = "MIT OR Apache-2.0"
+categories = ["algorithms", "cryptography", "command-line-utilities"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+clap = { version = "4.4.16", features = ["cargo"] }
