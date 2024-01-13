@@ -14,3 +14,9 @@ This calls `cargo build --release` and copies `target/release/shake128` in the p
 Run using `./shake128 <N>`.
 
 `shake128` reads from the standard input stream, and writes the resulting hash value to standard output. For more usage information, run `./shake128 --help`.
+
+## Testing
+
+Run `cargo test` to test if `shake128` produces the right output.
+
+In particular, `correct_short_text` and `correct_short_binary` check whether my implementation and the implementation from the [`sha3` crate](https://crates.io/crates/sha3) (which is only a dev dependency) give the same result.
