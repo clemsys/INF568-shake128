@@ -1,16 +1,32 @@
+use assert_cmd::assert;
 use clap::{arg, command, value_parser};
+use std::{
+    fs::read,
+    io::{self, Read},
+};
 
 const B: usize = 1600; // width of a Keccak-p permutation in bits
                        // this code only works for 1600: this is a feature
+const BB: usize = B / 8; // B in bytes
 const S: usize = 25; // bits per slice
 const W: usize = B / S; // bits per lane
 const L: usize = W.ilog2() as usize; // log2 of W
+const R: usize = 256; // r in bits for shake128
+                      // we assume that r is a multiple of 64
+                      // MAKE SURE 0 < R < B
+const RB: usize = R / 8; // r in bytes
+const RW: usize = R / 64; // r in words
+const C: usize = B - R; // c in bits
+const CB: usize = C / 8; // c in bytes
+const CW: usize = C / 64; // c in words
+const DB: usize = 32; // D in bytes
 
 type Lane = u64; // could use u32 for B = 800 for instance
 type Plane = [Lane; 5]; // x z
 type Sheet = [Lane; 5]; // y z
 type State = [Sheet; 5]; // x y z
 type SString = [Lane; S]; // (State string) string of B bits
+type BString = [u8; BB]; // byte string of B bits
 
 fn state_from_sstring(sstring: &SString) -> State {
     let mut state = [[0u64; 5]; 5];
@@ -136,6 +152,60 @@ fn keccakf(s: &SString) -> SString {
     keccakp(&s, 12 + 2 * L)
 }
 
+fn sstate_from_buffer(buffer: &[u8; RB]) -> SString {
+    let mut s: SString = [0u64; S];
+    for i in 0..RW {
+        // recall that RW = RB / 8
+        for j in 0..8 {
+            s[i] += (buffer[8 * i + j] as u64) << (8 * j);
+        }
+    }
+    s
+}
+
+fn sponge_step_6(f: fn(&SString) -> SString, s: &mut SString, padded_pi: &SString) {
+    let mut padded_pi_xor_s = [0u64; S];
+    for i in 0..S {
+        padded_pi_xor_s[i] = padded_pi[i] ^ s[i];
+    }
+    *s = f(&padded_pi_xor_s);
+}
+
+/// TODO: refactor
+fn shake128_sponge(
+    f: fn(&SString) -> SString,
+    n_reader: fn(&mut [u8]) -> io::Result<usize>,
+) -> [u8; DB] {
+    let mut buffer = [0u8; RB];
+    let mut s: SString = [0u64; S];
+    loop {
+        let read_bytes = n_reader(&mut buffer).unwrap();
+        if read_bytes != RB {
+            // add 1111 and pad with 10*1
+            for i in read_bytes..RB {
+                buffer[i] = 0;
+            }
+            buffer[read_bytes] += 0b11111000; // 1111 + first 1 of 10*1
+            buffer[RB - 1] += 1;
+        }
+        let padded_pi = sstate_from_buffer(&buffer);
+        sponge_step_6(f, &mut s, &padded_pi);
+        if read_bytes != RB {
+            break;
+        }
+    }
+    // only works for RB = DB = 32
+    let mut z = [0u8; DB];
+    for i in 0..DB {
+        z[i] = (s[i / 8] >> (8 * i)) as u8;
+    }
+    z
+}
+
+fn shake128(n_reader: fn(&mut [u8]) -> io::Result<usize>) -> [u8; DB] {
+    shake128_sponge(keccakf, n_reader)
+}
+
 fn main() {
     let matches = command!()
         .arg(
@@ -146,5 +216,5 @@ fn main() {
         .get_matches();
 
     let out_len_bytes = matches.get_one::<u32>("N").unwrap();
-    print!("9b171ccf7ff6b9478ce02a54a5a558dde55febc70e12f0ed402567639e404b74");
+    let res = shake128(io::stdin().bytes());
 }
