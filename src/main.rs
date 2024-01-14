@@ -45,6 +45,7 @@ fn sstring_from_state(state: &State) -> SString {
 }
 
 /// xor all elements of array `a`
+/// used in theta
 fn xor_array(a: &[u64]) -> u64 {
     let mut res: u64 = 0;
     for e in a {
@@ -91,7 +92,7 @@ fn pi(a: &State) -> State {
     b
 }
 
-fn xi(a: &State) -> State {
+fn chi(a: &State) -> State {
     let mut b: State = [[0u64; 5]; 5]; // a' in FIPS 202
     for x in 0..5 {
         for y in 0..5 {
@@ -133,7 +134,7 @@ fn iota(a: &State, ir: usize) -> State {
 }
 
 fn round(a: &State, ir: usize) -> State {
-    iota(&xi(&pi(&rho(&theta(&a)))), ir)
+    iota(&chi(&pi(&rho(&theta(&a)))), ir)
 }
 
 fn keccakp(s: &SString, nr: usize) -> SString {
@@ -222,4 +223,117 @@ fn main() {
     let out_len_bytes = matches.get_one::<u32>("N").unwrap();
     let res: [u8; 32] = shake128(|buffer| std::io::stdin().read(buffer));
     print!("{}", bytes_to_string(&res));
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+
+    use super::*;
+
+    /// convert to State from String with format defined in
+    /// https://github.com/XKCP/XKCP/blob/master/tests/TestVectors/KeccakF-1600-IntermediateValues.txt
+    fn state_from_xkcp_matrix(xkcp: &str) -> State {
+        let lines: Vec<String> = xkcp.lines().map(str::to_string).collect();
+        let mut words: Vec<Vec<String>> = Vec::new();
+        for s in lines {
+            words.push(s.split_whitespace().map(str::to_string).collect());
+        }
+        let mut s: State = [[0u64; 5]; 5];
+        for x in 0..5 {
+            for y in 0..5 {
+                s[x][y] = u64::from_str_radix(&words[y][x], 16).unwrap();
+            }
+        }
+        s
+    }
+
+    /// convert to SString from String with format defined in
+    /// https://github.com/XKCP/XKCP/blob/master/tests/TestVectors/KeccakF-1600-IntermediateValues.txt
+    fn bstring_from_xkcp_line(xkcp: &str) -> BString {
+        let bytes: Vec<String> = xkcp.split_whitespace().map(str::to_string).collect();
+        let mut b: BString = [0u8; BB];
+        for i in 0..BB {
+            b[i] = u8::from_str_radix(&bytes[i], 16).unwrap();
+        }
+        b
+    }
+
+    fn sstring_from_bstring(b: &BString) -> SString {
+        let mut s: SString = [0u64; S];
+        for i in 0..BB {
+            s[i / 8] += (b[i] as u64) << (8 * (i % 8));
+        }
+        s
+    }
+
+    #[test]
+    fn correct_keccakf() {
+        let input_file = "tests/samples/keccakf_input";
+        let expected_file = "tests/samples/keccakf_expected";
+        let s = sstring_from_bstring(&bstring_from_xkcp_line(
+            &fs::read_to_string(input_file).unwrap(),
+        ));
+        let output = super::keccakf(&s);
+        let expected = sstring_from_bstring(&bstring_from_xkcp_line(
+            &fs::read_to_string(expected_file).unwrap(),
+        ));
+        assert!(output == expected);
+    }
+
+    fn correct_permutation(
+        permutation: fn(&State) -> State,
+        input_file: &str,
+        expected_file: &str,
+    ) {
+        let s = state_from_xkcp_matrix(&fs::read_to_string(input_file).unwrap());
+        let output = permutation(&s);
+        let expected = state_from_xkcp_matrix(&fs::read_to_string(expected_file).unwrap());
+        assert!(output == expected);
+    }
+
+    #[test]
+    fn correct_theta() {
+        correct_permutation(
+            super::theta,
+            "tests/samples/theta_input_7",
+            "tests/samples/theta_expected_7",
+        )
+    }
+
+    #[test]
+    fn correct_rho() {
+        correct_permutation(
+            super::rho,
+            "tests/samples/theta_expected_7",
+            "tests/samples/rho_expected_7",
+        )
+    }
+
+    #[test]
+    fn correct_pi() {
+        correct_permutation(
+            super::pi,
+            "tests/samples/rho_expected_7",
+            "tests/samples/pi_expected_7",
+        )
+    }
+
+    #[test]
+    fn correct_chi() {
+        correct_permutation(
+            super::chi,
+            "tests/samples/pi_expected_7",
+            "tests/samples/chi_expected_7",
+        )
+    }
+
+    #[test]
+    fn correct_iota() {
+        correct_permutation(
+            |s| super::iota(&s, 7),
+            "tests/samples/chi_expected_7",
+            "tests/samples/iota_expected_7",
+        )
+    }
 }
