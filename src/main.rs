@@ -1,9 +1,5 @@
-use assert_cmd::assert;
 use clap::{arg, command, value_parser};
-use std::{
-    fs::read,
-    io::{self, Read},
-};
+use std::io::{self, Read};
 
 const B: usize = 1600; // width of a Keccak-p permutation in bits
                        // this code only works for 1600: this is a feature
@@ -65,7 +61,7 @@ fn theta(a: &State) -> State {
         c[x] = xor_array(&a[x]);
     }
     for x in 0..5 {
-        d[x] = c[(x - 1) % 5] ^ (c[(x + 1) % 5]).rotate_left(1); // rotate left to compensate for c[x+1 mod 5][(z-1) mod w] in FIPS
+        d[x] = c[(x + 4) % 5] ^ (c[(x + 1) % 5]).rotate_left(1); // rotate left to compensate for c[x+1 mod 5][(z-1) mod w] in FIPS
         for y in 0..5 {
             b[x][y] = a[x][y] ^ d[x];
         }
@@ -89,7 +85,7 @@ fn pi(a: &State) -> State {
     let mut b: State = [[0u64; 5]; 5]; // a' in FIPS 202
     for x in 0..5 {
         for y in 0..5 {
-            b[x][y] = a[x + 3 * y][x];
+            b[x][y] = a[(x + 3 * y) % 5][x];
         }
     }
     b
@@ -129,7 +125,7 @@ fn iota(a: &State, ir: usize) -> State {
     let mut rc_bits: Lane = 0;
     for j in 0..=L {
         if rc(j + 7 * ir) == 1 {
-            rc_bits += 1 << (1 << j - 1);
+            rc_bits += 1 << ((1 << j) - 1);
         }
     }
     b[0][0] ^= rc_bits;
@@ -197,13 +193,21 @@ fn shake128_sponge(
     // only works for RB = DB = 32
     let mut z = [0u8; DB];
     for i in 0..DB {
-        z[i] = (s[i / 8] >> (8 * i)) as u8;
+        z[i] = (s[i / 8] >> (8 * (i % 8))) as u8;
     }
     z
 }
 
 fn shake128(n_reader: fn(&mut [u8]) -> io::Result<usize>) -> [u8; DB] {
     shake128_sponge(keccakf, n_reader)
+}
+
+fn bytes_to_string(bytes: &[u8]) -> String {
+    let mut s = String::new();
+    for b in bytes {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
 }
 
 fn main() {
@@ -216,5 +220,6 @@ fn main() {
         .get_matches();
 
     let out_len_bytes = matches.get_one::<u32>("N").unwrap();
-    let res = shake128(io::stdin().bytes());
+    let res: [u8; 32] = shake128(|buffer| std::io::stdin().read(buffer));
+    print!("{}", bytes_to_string(&res));
 }
