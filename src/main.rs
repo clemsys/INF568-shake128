@@ -1,30 +1,20 @@
 use clap::{arg, command, value_parser};
-use std::io::{self, Read};
+use std::io::Read;
 
 const B: usize = 1600; // width of a Keccak-p permutation in bits
                        // this code only works for 1600: this is a feature
-const BB: usize = B / 8; // B in bytes
 const S: usize = 25; // bits per slice
 const W: usize = B / S; // bits per lane
 const L: usize = W.ilog2() as usize; // log2 of W
-const R: usize = 256; // r in bits for shake128
-                      // we assume that r is a multiple of 64
-                      // MAKE SURE 0 < R < B
-const RB: usize = R / 8; // r in bytes
-const RW: usize = R / 64; // r in words
-const C: usize = B - R; // c in bits
-const CB: usize = C / 8; // c in bytes
-const CW: usize = C / 64; // c in words
-const DB: usize = 32; // D in bytes
 
 type Lane = u64; // could use u32 for B = 800 for instance
 type Plane = [Lane; 5]; // x z
 type Sheet = [Lane; 5]; // y z
 type State = [Sheet; 5]; // x y z
 type SString = [Lane; S]; // (State string) string of B bits
-type BString = [u8; BB]; // byte string of B bits
 
-fn state_from_sstring(sstring: &SString) -> State {
+fn state_from_sstring(sstring: &[u64]) -> State {
+    assert!(sstring.len() == S);
     let mut state = [[0u64; 5]; 5];
     for x in 0..5 {
         for y in 0..5 {
@@ -75,7 +65,7 @@ fn rho(a: &State) -> State {
     b[0][0] = a[0][0];
     let (mut x, mut y) = (1, 0);
     for t in 0..24 {
-        let offset = (((t + 1) * (t + 2) >> 1) % W) as u32;
+        let offset = ((((t + 1) * (t + 2)) >> 1) % W) as u32;
         b[x][y] = (a[x][y]).rotate_left(offset); // rotate left for (z–(t+1)(t+2)/2) mod w in FIPS
         (x, y) = (y, (2 * x + 3 * y) % 5);
     }
@@ -122,7 +112,7 @@ fn rc(t: usize) -> Lane {
 }
 
 fn iota(a: &State, ir: usize) -> State {
-    let mut b: State = a.clone(); // a' in FIPS 202
+    let mut b: State = *a; // a' in FIPS 202
     let mut rc_bits: Lane = 0;
     for j in 0..=L {
         if rc(j + 7 * ir) == 1 {
@@ -134,76 +124,87 @@ fn iota(a: &State, ir: usize) -> State {
 }
 
 fn round(a: &State, ir: usize) -> State {
-    iota(&chi(&pi(&rho(&theta(&a)))), ir)
+    iota(&chi(&pi(&rho(&theta(a)))), ir)
 }
 
-fn keccakp(s: &SString, nr: usize) -> SString {
-    let mut a = state_from_sstring(&s);
+fn keccakp(s: &[u64], nr: usize) -> SString {
+    assert!(s.len() == S);
+    let mut a = state_from_sstring(s);
     for ir in (12 + 2 * L - nr)..=(12 + 2 * L - 1) {
         a = round(&a, ir);
     }
     sstring_from_state(&a)
 }
 
-fn keccakf(s: &SString) -> SString {
-    keccakp(&s, 12 + 2 * L)
+fn keccakf(s: &[u64]) -> SString {
+    assert!(s.len() == S);
+    keccakp(s, 12 + 2 * L)
 }
 
-fn sstate_from_buffer(buffer: &[u8; RB]) -> SString {
-    let mut s: SString = [0u64; S];
-    for i in 0..RW {
-        // recall that RW = RB / 8
-        for j in 0..8 {
-            s[i] += (buffer[8 * i + j] as u64) << (8 * j);
-        }
+fn words_from_bytes(b: &[u8]) -> Vec<u64> {
+    assert!(b.len() % 8 == 0);
+    let mut w = vec![0u64; b.len() >> 3]; // divide by 8
+    for i in 0..(b.len()) {
+        w[i >> 3] += (b[i] as u64) << ((i % 8) << 3);
     }
-    s
+    w
 }
 
-fn sponge_step_6(f: fn(&SString) -> SString, s: &mut SString, padded_pi: &SString) {
-    let mut padded_pi_xor_s = [0u64; S];
-    for i in 0..S {
-        padded_pi_xor_s[i] = padded_pi[i] ^ s[i];
+fn bytes_from_words(w: &[u64]) -> Vec<u8> {
+    let mut b = vec![0u8; w.len() << 3];
+    for i in 0..(b.len()) {
+        b[i] = (w[i >> 3] >> ((i % 8) << 3) & 0xff) as u8;
     }
-    *s = f(&padded_pi_xor_s);
+    b
 }
 
-/// TODO: refactor
-fn shake128_sponge(
-    f: fn(&SString) -> SString,
-    n_reader: fn(&mut [u8]) -> io::Result<usize>,
-) -> [u8; DB] {
-    let mut buffer = [0u8; RB];
-    let mut s: SString = [0u64; S];
-    loop {
-        let read_bytes = n_reader(&mut buffer).unwrap();
-        if read_bytes != RB {
-            // add 1111 and pad with 10*1
-            for i in read_bytes..RB {
-                buffer[i] = 0;
-            }
-            buffer[read_bytes] += 0b11111000; // 1111 + first 1 of 10*1
-            buffer[RB - 1] += 1;
+/// padding is done by shake128
+/// db in bytes
+fn sponge(f: fn(&[u64]) -> SString, rb: usize, p: &[u8], db: usize) -> Vec<u8> {
+    let rw = rb >> 3; // r in 64-bits words
+    let cw = (B >> 6) - rw; // c in words
+    assert!(p.len() % rb == 0);
+    let mut s = [0u64; S];
+    for i in 0..(p.len() / rb) {
+        let mut p_i = words_from_bytes(&p[(rb * i)..(rb * (i + 1))]);
+        p_i.append(&mut vec![0u64; cw]);
+        assert!(p_i.len() == S);
+        let mut padded_s_xor_p_i = [0u64; S];
+        for j in 0..S {
+            padded_s_xor_p_i[j] = s[j] ^ p_i[j];
         }
-        let padded_pi = sstate_from_buffer(&buffer);
-        sponge_step_6(f, &mut s, &padded_pi);
-        if read_bytes != RB {
-            break;
-        }
+        s = f(&padded_s_xor_p_i);
     }
-    // only works for RB = DB = 32
-    let mut z = [0u8; DB];
-    for i in 0..DB {
-        z[i] = (s[i / 8] >> (8 * (i % 8))) as u8;
+    let mut z: Vec<u8> = Vec::new();
+    while z.len() < db {
+        z.append(&mut bytes_from_words(&s[0..rw]));
+        s = f(&s);
     }
+    z.truncate(db);
     z
 }
 
-fn shake128(n_reader: fn(&mut [u8]) -> io::Result<usize>) -> [u8; DB] {
-    shake128_sponge(keccakf, n_reader)
+/// padding is done by shake128
+/// cb, db in bytes
+fn keccak(cb: usize, p: &[u8], db: usize) -> Vec<u8> {
+    sponge(keccakf, (B >> 3) - cb, p, db)
 }
 
-fn bytes_to_string(bytes: &[u8]) -> String {
+/// cb, db in bytes
+fn shake128(message: &mut Vec<u8>, db: usize) -> Vec<u8> {
+    let cb = 128 >> 3;
+    let rb = (B >> 3) - cb;
+    // pad message
+    message.push(0b00011111);
+    while message.len() % rb != 0 {
+        message.push(0);
+    }
+    let mlen = message.len();
+    message[mlen - 1] += 0b10000000;
+    keccak(cb, message, db)
+}
+
+fn string_from_bytes(bytes: &[u8]) -> String {
     let mut s = String::new();
     for b in bytes {
         s.push_str(&format!("{:02x}", b));
@@ -216,13 +217,15 @@ fn main() {
         .arg(
             arg!([N] "Length of output in bytes")
                 .required(true)
-                .value_parser(value_parser!(u32)),
+                .value_parser(value_parser!(usize)),
         )
         .get_matches();
 
-    let out_len_bytes = matches.get_one::<u32>("N").unwrap();
-    let res: [u8; 32] = shake128(|buffer| std::io::stdin().read(buffer));
-    print!("{}", bytes_to_string(&res));
+    let db = *matches.get_one::<usize>("N").unwrap(); // output length in bytes
+    let mut message: Vec<u8> = Vec::new();
+    std::io::stdin().read_to_end(&mut message).unwrap();
+    let res = shake128(&mut message, db);
+    print!("{}", string_from_bytes(&res));
 }
 
 #[cfg(test)]
@@ -230,6 +233,9 @@ mod tests {
     use std::fs;
 
     use super::*;
+
+    const BB: usize = B >> 3; // b in bytes
+    type BString = [u8; BB]; // byte string of B bits
 
     /// convert to State from String with format defined in
     /// https://github.com/XKCP/XKCP/blob/master/tests/TestVectors/KeccakF-1600-IntermediateValues.txt
@@ -259,26 +265,18 @@ mod tests {
         b
     }
 
-    fn sstring_from_bstring(b: &BString) -> SString {
-        let mut s: SString = [0u64; S];
-        for i in 0..BB {
-            s[i / 8] += (b[i] as u64) << (8 * (i % 8));
-        }
-        s
-    }
-
     #[test]
     fn correct_keccakf() {
         let input_file = "tests/samples/keccakf_input";
         let expected_file = "tests/samples/keccakf_expected";
-        let s = sstring_from_bstring(&bstring_from_xkcp_line(
+        let s = words_from_bytes(&bstring_from_xkcp_line(
             &fs::read_to_string(input_file).unwrap(),
         ));
         let output = super::keccakf(&s);
-        let expected = sstring_from_bstring(&bstring_from_xkcp_line(
+        let expected = words_from_bytes(&bstring_from_xkcp_line(
             &fs::read_to_string(expected_file).unwrap(),
         ));
-        assert!(output == expected);
+        assert_eq!(output, &expected[0..]);
     }
 
     fn correct_permutation(

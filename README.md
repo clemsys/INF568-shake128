@@ -20,3 +20,5 @@ Run using `./shake128 <N>`.
 Run `cargo test` to test if `shake128` produces the right output.
 
 In particular, `correct_short_text` and `correct_short_binary` check whether my implementation and the implementation from the [`sha3` crate](https://crates.io/crates/sha3) (which is only a dev dependency) give the same result.
+
+`cargo test` also runs unit tests (for permutations, …) based on the data from the [XKCP github repo](https://github.com/XKCP/XKCP/blob/master/tests/TestVectors/)
