@@ -192,7 +192,7 @@ fn keccak(cb: usize, p: &[u8], db: usize) -> Vec<u8> {
 
 /// cb, db in bytes
 fn shake128(message: &mut Vec<u8>, db: usize) -> Vec<u8> {
-    let cb = 128 >> 3;
+    let cb = 256 >> 3;
     let rb = (B >> 3) - cb;
     // pad message
     message.push(0b00011111);
