@@ -93,29 +93,48 @@ fn chi(a: &State) -> State {
 }
 
 /// rc function defined in FIPS,
-/// returns 0 or 1
-fn rc(t: usize) -> Lane {
-    if t % 255 == 0 {
-        1
+const fn rc_generator(t: usize) -> bool {
+    assert!(t < 255);
+    if t == 0 {
+        true
     } else {
-        let mut r: Lane = 0b0000001;
-        for _ in 1..=(t % 255) {
+        let mask: u8 = 0b01110001;
+        let mut r: u8 = 0b0000001;
+        let mut i = 1;
+        while i <= t {
+            let r8 = r & 0b10000000;
             r <<= 1; // r = 0 || r
-            let r8: Lane = (r >> 8) & 1;
-            if r8 == 1 {
-                let mask: Lane = 0b01110001;
+            if r8 != 0 {
                 r ^= mask;
             }
+            i += 1;
         }
-        r & 1 // return r[0]
+        (r & 1) == 1 // return r[0]
     }
+}
+
+const fn generate_rc() -> [bool; 255] {
+    let mut t = 0;
+    let mut rc = [true; 255];
+    while t < 255 {
+        rc[t] = rc_generator(t);
+        t += 1;
+    }
+    rc
+}
+
+/// RC is computed at compile time for performance reasons
+const RC: [bool; 255] = generate_rc();
+
+fn rc(t: usize) -> bool {
+    RC[t % 255]
 }
 
 fn iota(a: &State, ir: usize) -> State {
     let mut b: State = *a; // a' in FIPS 202
     let mut rc_bits: Lane = 0;
     for j in 0..=L {
-        if rc(j + 7 * ir) == 1 {
+        if rc(j + 7 * ir) {
             rc_bits += 1 << ((1 << j) - 1);
         }
     }
