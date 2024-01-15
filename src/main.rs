@@ -60,14 +60,53 @@ fn theta(a: &State) -> State {
     b
 }
 
+/// compute offset used in rho
+const fn offset(t: usize) -> u8 {
+    ((((t + 1) * (t + 2)) >> 1) % W) as u8
+}
+
+/// generate the offsets used in rho at compilation time
+const fn generate_rho_offsets() -> [[u8; 5]; 5] {
+    let mut t_indexed_offsets = [0u8; 25];
+    let mut t_indexed_xy = [0usize; 25]; // xy[i] = (x << 3) + y
+    let mut i = 0;
+    while i < 24 {
+        // use while because for is not supported in const fn
+        t_indexed_offsets[i] = offset(i);
+        if i == 0 {
+            t_indexed_xy[0] = 8;
+        } else {
+            let y = t_indexed_xy[i - 1] % 8;
+            let x = t_indexed_xy[i - 1] >> 3;
+            t_indexed_xy[i] = (y << 3) + ((2 * x + 3 * y) % 5);
+        }
+        i += 1;
+    }
+    let mut offsets = [[0u8; 5]; 5];
+    let mut i = 0;
+    while i < 24 {
+        let y = t_indexed_xy[i] % 8;
+        let x = t_indexed_xy[i] >> 3;
+        offsets[x][y] = t_indexed_offsets[i];
+        i += 1;
+    }
+    offsets
+}
+
+/// offsets used in rho computed at compilation time (to improve performance)
+/// we could have has well copied the values from FIPS 202 manually
+const RHO_OFFSETS: [[u8; 5]; 5] = generate_rho_offsets();
+
 fn rho(a: &State) -> State {
     let mut b: State = [[0u64; 5]; 5]; // a' in FIPS 202
-    b[0][0] = a[0][0];
-    let (mut x, mut y) = (1, 0);
-    for t in 0..24 {
-        let offset = ((((t + 1) * (t + 2)) >> 1) % W) as u32;
-        b[x][y] = (a[x][y]).rotate_left(offset); // rotate left for (z–(t+1)(t+2)/2) mod w in FIPS
-        (x, y) = (y, (2 * x + 3 * y) % 5);
+    for x in 0..5 {
+        for y in 0..5 {
+            if x != 0 || y != 0 {
+                b[x][y] = (a[x][y]).rotate_left(RHO_OFFSETS[x][y] as u32); // rotate left for (z–(t+1)(t+2)/2) mod w in FIPS
+            } else {
+                b[0][0] = a[0][0];
+            }
+        }
     }
     b
 }
@@ -102,6 +141,7 @@ const fn rc_generator(t: usize) -> bool {
         let mut r: u8 = 0b0000001;
         let mut i = 1;
         while i <= t {
+            // use while because for is not supported in const fn
             let r8 = r & 0b10000000;
             r <<= 1; // r = 0 || r
             if r8 != 0 {
@@ -117,6 +157,7 @@ const fn generate_rc() -> [bool; 255] {
     let mut t = 0;
     let mut rc = [true; 255];
     while t < 255 {
+        // use while because for is not supported in const fn
         rc[t] = rc_generator(t);
         t += 1;
     }
