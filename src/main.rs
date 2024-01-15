@@ -61,13 +61,13 @@ fn theta(a: &State) -> State {
 }
 
 /// compute offset used in rho
-const fn offset(t: usize) -> u8 {
-    ((((t + 1) * (t + 2)) >> 1) % W) as u8
+const fn offset(t: usize) -> u32 {
+    ((((t + 1) * (t + 2)) >> 1) % W) as u32
 }
 
 /// generate the offsets used in rho at compilation time
-const fn generate_rho_offsets() -> [[u8; 5]; 5] {
-    let mut t_indexed_offsets = [0u8; 25];
+const fn generate_rho_offsets() -> [[u32; 5]; 5] {
+    let mut t_indexed_offsets = [0u32; 25];
     let mut t_indexed_xy = [0usize; 25]; // xy[i] = (x << 3) + y
     let mut i = 0;
     while i < 24 {
@@ -82,7 +82,7 @@ const fn generate_rho_offsets() -> [[u8; 5]; 5] {
         }
         i += 1;
     }
-    let mut offsets = [[0u8; 5]; 5];
+    let mut offsets = [[0u32; 5]; 5];
     let mut i = 0;
     while i < 24 {
         let y = t_indexed_xy[i] % 8;
@@ -95,14 +95,14 @@ const fn generate_rho_offsets() -> [[u8; 5]; 5] {
 
 /// offsets used in rho computed at compilation time (to improve performance)
 /// we could have has well copied the values from FIPS 202 manually
-const RHO_OFFSETS: [[u8; 5]; 5] = generate_rho_offsets();
+const RHO_OFFSETS: [[u32; 5]; 5] = generate_rho_offsets();
 
 fn rho(a: &State) -> State {
     let mut b: State = [[0u64; 5]; 5]; // a' in FIPS 202
     for x in 0..5 {
         for y in 0..5 {
             if x != 0 || y != 0 {
-                b[x][y] = (a[x][y]).rotate_left(RHO_OFFSETS[x][y] as u32); // rotate left for (z–(t+1)(t+2)/2) mod w in FIPS
+                b[x][y] = (a[x][y]).rotate_left(RHO_OFFSETS[x][y]); // rotate left for (z–(t+1)(t+2)/2) mod w in FIPS
             } else {
                 b[0][0] = a[0][0];
             }
