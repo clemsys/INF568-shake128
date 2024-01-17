@@ -1,11 +1,12 @@
 use clap::{arg, command, value_parser};
-use std::io::Read;
+use std::io::{Read, StdinLock};
 
 const B: usize = 1600; // width of a Keccak-p permutation in bits
                        // this code only works for 1600: this is a feature
 const S: usize = 25; // bits per slice
 const W: usize = B / S; // bits per lane
 const L: usize = W.ilog2() as usize; // log2 of W
+const SHAKE128_CB: usize = 256 >> 3; // c in bytes for shake128
 
 type Lane = u64; // could use u32 for B = 800 for instance
 type Plane = [Lane; 5]; // x z
@@ -220,13 +221,20 @@ fn bytes_from_words(w: &[u64]) -> Vec<u8> {
 
 /// padding is done by shake128
 /// db in bytes
-fn sponge(f: fn(&[u64]) -> SString, rb: usize, p: &[u8], db: usize) -> Vec<u8> {
+fn sponge(
+    f: fn(&[u64]) -> SString,
+    rb: usize,
+    padding_read: fn(&mut Vec<u8>, &mut StdinLock) -> bool,
+    reader: &mut StdinLock,
+    db: usize,
+) -> Vec<u8> {
     let rw = rb >> 3; // r in 64-bits words
     let cw = (B >> 6) - rw; // c in words
-    assert!(p.len() % rb == 0);
     let mut s = [0u64; S];
-    for i in 0..(p.len() / rb) {
-        let mut p_i = words_from_bytes(&p[(rb * i)..(rb * (i + 1))]);
+    loop {
+        let mut buffer: Vec<u8> = Vec::new();
+        let remaining_data = padding_read(&mut buffer, reader);
+        let mut p_i = words_from_bytes(&buffer);
         p_i.append(&mut vec![0u64; cw]);
         assert!(p_i.len() == S);
         let mut padded_s_xor_p_i = [0u64; S];
@@ -234,6 +242,9 @@ fn sponge(f: fn(&[u64]) -> SString, rb: usize, p: &[u8], db: usize) -> Vec<u8> {
             padded_s_xor_p_i[j] = s[j] ^ p_i[j];
         }
         s = f(&padded_s_xor_p_i);
+        if !remaining_data {
+            break;
+        }
     }
     let mut z: Vec<u8> = Vec::new();
     while z.len() < db {
@@ -246,22 +257,22 @@ fn sponge(f: fn(&[u64]) -> SString, rb: usize, p: &[u8], db: usize) -> Vec<u8> {
 
 /// padding is done by shake128
 /// cb, db in bytes
-fn keccak(cb: usize, p: &[u8], db: usize) -> Vec<u8> {
-    sponge(keccakf, (B >> 3) - cb, p, db)
+fn keccak(
+    cb: usize,
+    padding_read: fn(&mut Vec<u8>, &mut StdinLock) -> bool,
+    reader: &mut StdinLock,
+    db: usize,
+) -> Vec<u8> {
+    sponge(keccakf, (B >> 3) - cb, padding_read, reader, db)
 }
 
 /// cb, db in bytes
-fn shake128(message: &mut Vec<u8>, db: usize) -> Vec<u8> {
-    let cb = 256 >> 3;
-    let rb = (B >> 3) - cb;
-    // pad message
-    message.push(0b00011111);
-    while message.len() % rb != 0 {
-        message.push(0);
-    }
-    let mlen = message.len();
-    message[mlen - 1] += 0b10000000;
-    keccak(cb, message, db)
+fn shake128(
+    padding_read: fn(&mut Vec<u8>, &mut StdinLock) -> bool,
+    reader: &mut StdinLock,
+    db: usize,
+) -> Vec<u8> {
+    keccak(SHAKE128_CB, padding_read, reader, db)
 }
 
 fn string_from_bytes(bytes: &[u8]) -> String {
@@ -270,6 +281,22 @@ fn string_from_bytes(bytes: &[u8]) -> String {
         s.push_str(&format!("{:02x}", b));
     }
     s
+}
+
+/// returns whether stdin still holds unread bytes
+fn padding_read(buffer: &mut Vec<u8>, reader: &mut StdinLock) -> bool {
+    let capacity = B / 8 - SHAKE128_CB;
+    let read_bytes = reader.take(capacity as u64).read_to_end(buffer).unwrap();
+    if read_bytes == capacity {
+        true
+    } else {
+        buffer.push(0b00011111);
+        for _ in (read_bytes + 1)..capacity {
+            buffer.push(0);
+        }
+        buffer[capacity - 1] += 0b10000000;
+        false
+    }
 }
 
 fn main() {
@@ -281,10 +308,10 @@ fn main() {
         )
         .get_matches();
 
+    let mut reader = std::io::stdin().lock();
+
     let db = *matches.get_one::<usize>("N").unwrap(); // output length in bytes
-    let mut message: Vec<u8> = Vec::new();
-    std::io::stdin().read_to_end(&mut message).unwrap();
-    let res = shake128(&mut message, db);
+    let res = shake128(padding_read, &mut reader, db);
     print!("{}", string_from_bytes(&res));
 }
 
