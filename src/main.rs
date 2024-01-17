@@ -154,6 +154,7 @@ const fn rc_generator(t: usize) -> bool {
     }
 }
 
+/// generate RC at compilation time for performance reasons
 const fn generate_rc() -> [bool; 255] {
     let mut t = 0;
     let mut rc = [true; 255];
@@ -165,7 +166,7 @@ const fn generate_rc() -> [bool; 255] {
     rc
 }
 
-/// RC is computed at compile time for performance reasons
+/// RC is computed at compilation time for performance reasons
 const RC: [bool; 255] = generate_rc();
 
 fn rc(t: usize) -> bool {
@@ -206,7 +207,7 @@ fn words_from_bytes(b: &[u8]) -> Vec<u64> {
     assert!(b.len() % 8 == 0);
     let mut w = vec![0u64; b.len() >> 3]; // divide by 8
     for i in 0..(b.len() >> 3) {
-        w[i] = u64::from_ne_bytes(b[(i << 3)..((i + 1) << 3)].try_into().unwrap());
+        w[i] = u64::from_le_bytes(b[(i << 3)..((i + 1) << 3)].try_into().unwrap());
     }
     w
 }
