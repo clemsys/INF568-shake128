@@ -205,8 +205,8 @@ fn keccakf(s: &[u64]) -> SString {
 fn words_from_bytes(b: &[u8]) -> Vec<u64> {
     assert!(b.len() % 8 == 0);
     let mut w = vec![0u64; b.len() >> 3]; // divide by 8
-    for i in 0..(b.len()) {
-        w[i >> 3] += (b[i] as u64) << ((i % 8) << 3);
+    for i in 0..(b.len() >> 3) {
+        w[i] = u64::from_ne_bytes(b[(i << 3)..((i + 1) << 3)].try_into().unwrap());
     }
     w
 }
@@ -231,8 +231,9 @@ fn sponge(
     let rw = rb >> 3; // r in 64-bits words
     let cw = (B >> 6) - rw; // c in words
     let mut s = [0u64; S];
+    let mut buffer: Vec<u8> = Vec::new();
     loop {
-        let mut buffer: Vec<u8> = Vec::new();
+        buffer.clear();
         let remaining_data = padding_read(&mut buffer, reader);
         let mut p_i = words_from_bytes(&buffer);
         p_i.append(&mut vec![0u64; cw]);
