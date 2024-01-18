@@ -203,6 +203,7 @@ fn keccakf(s: &[u64]) -> SString {
     keccakp(s, 12 + 2 * L)
 }
 
+/// groups bytes 8 by 8 to form an array of u64
 fn words_from_bytes(b: &[u8]) -> Vec<u64> {
     assert!(b.len() % 8 == 0);
     let mut w = vec![0u64; b.len() >> 3]; // divide by 8
@@ -212,6 +213,7 @@ fn words_from_bytes(b: &[u8]) -> Vec<u64> {
     w
 }
 
+/// transform each u64 in input array in eight u8
 fn bytes_from_words(w: &[u64]) -> Vec<u8> {
     let mut b = vec![0u8; w.len() << 3];
     for i in 0..(b.len()) {
@@ -220,8 +222,9 @@ fn bytes_from_words(w: &[u64]) -> Vec<u8> {
     b
 }
 
-/// padding is done by shake128
-/// db in bytes
+/// computes the output of the sponge on the content read by reader thanks to padding_read
+/// with permutation f <br>
+/// rb is r in bytes, db is d in bytes
 fn sponge(
     f: fn(&[u64]) -> SString,
     rb: usize,
@@ -257,8 +260,8 @@ fn sponge(
     z
 }
 
-/// padding is done by shake128
-/// cb, db in bytes
+/// computes keccak[c] on the content read by reader thanks to padding_read <br>
+/// cb is c in bytes, db is d in bytes
 fn keccak(
     cb: usize,
     padding_read: fn(&mut Vec<u8>, &mut StdinLock) -> bool,
@@ -268,7 +271,8 @@ fn keccak(
     sponge(keccakf, (B >> 3) - cb, padding_read, reader, db)
 }
 
-/// cb, db in bytes
+/// computes the shake128 on the content read by reader thanks to padding_read <br>
+/// db is d in bytes
 fn shake128(
     padding_read: fn(&mut Vec<u8>, &mut StdinLock) -> bool,
     reader: &mut StdinLock,
@@ -277,14 +281,8 @@ fn shake128(
     keccak(SHAKE128_CB, padding_read, reader, db)
 }
 
-fn string_from_bytes(bytes: &[u8]) -> String {
-    let mut s = String::new();
-    for b in bytes {
-        s.push_str(&format!("{:02x}", b));
-    }
-    s
-}
-
+/// takes RB bytes from the reader and puts them in the buffer
+/// and adds padding bytes at the end for shake128 <br>
 /// returns whether stdin still holds unread bytes
 fn padding_read(buffer: &mut Vec<u8>, reader: &mut StdinLock) -> bool {
     let capacity = B / 8 - SHAKE128_CB;
@@ -301,7 +299,17 @@ fn padding_read(buffer: &mut Vec<u8>, reader: &mut StdinLock) -> bool {
     }
 }
 
+/// formats the (large) integer stored in a bytes array as a string of hexadecimal digits
+fn string_from_bytes(bytes: &[u8]) -> String {
+    let mut s = String::new();
+    for b in bytes {
+        s.push_str(&format!("{:02x}", b));
+    }
+    s
+}
+
 fn main() {
+    // deal with command line arguments
     let matches = command!()
         .arg(
             arg!([N] "Length of output in bytes")
@@ -309,10 +317,13 @@ fn main() {
                 .value_parser(value_parser!(usize)),
         )
         .get_matches();
+    // convert CLI argument to usize (output length in bytes)
+    let db = *matches.get_one::<usize>("N").unwrap();
 
+    // create (buffered) reader to read bytes from stdin
     let mut reader = std::io::stdin().lock();
 
-    let db = *matches.get_one::<usize>("N").unwrap(); // output length in bytes
+    // compute the shake128
     let res = shake128(padding_read, &mut reader, db);
     print!("{}", string_from_bytes(&res));
 }
